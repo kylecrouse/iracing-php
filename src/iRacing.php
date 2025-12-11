@@ -35,9 +35,9 @@ class iRacing
     public Track $track;
     public TimeAttack $time_attack;
     
-    function __construct(string $username, string $password, $cookiejar = LibConstants::COOKIEJAR)
+    function __construct(callable $tokenProvider)
     {
-        $this->api = new Api($username, $password, $cookiejar);
+        $this->api = new Api($tokenProvider);
 
         $this->car = new Car($this->api);
         $this->carclass = new CarClass($this->api);

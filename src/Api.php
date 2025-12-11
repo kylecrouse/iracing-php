@@ -2,96 +2,24 @@
 
 namespace iRacingPHP;
 
-use iRacingPHP\Exceptions\AuthenticationFailedException;
-use iRacingPHP\Exceptions\AuthenticationRequestFailedException;
 use iRacingPHP\Exceptions\RequestRateLimitedException;
 use iRacingPHP\Exceptions\SiteMaintenanceException;
 use iRacingPHP\Exceptions\RequestFailedException;
 use iRacingPHP\Models\RateLimits;
-use \GuzzleHttp\Cookie\FileCookieJar;
 use iRacingPHP\Exceptions\DataRequestFailedException;
 
 class Api
 {
-    private string $username;
-    private string $loginHash;
-
-    private FileCookieJar $jar;
+    private $tokenProvider; // callable: fn(): ?string
     private \GuzzleHttp\Client $guzzle;
 
     public RateLimits $rateLimits;
 
-    function __construct(string $username, string $password, string $cookiejar)
+    function __construct(callable $tokenProvider)
     {
-        $this->username = $username;
-        $this->loginHash = $this->hashLogin($username, $password);
-        $this->jar = new FileCookieJar($cookiejar);
+        $this->tokenProvider = $tokenProvider;
         $this->guzzle = new \GuzzleHttp\Client();
         $this->rateLimits = new RateLimits();
-    }
-
-    /**
-     * Calls requestLogin() to make the authentication request, checks the response.
-     *
-     * @return mixed Authentication response
-     * @throws AuthenticationFailedException
-     */
-    private function authenticate()
-    {
-        $auth = $this->requestLogin();
-
-        if($auth->authcode === 0)
-        {
-            throw new AuthenticationFailedException($auth->message);
-        }
-
-        return $auth;
-    }
-
-    /**
-     * Hashes the username and password according to iRacing requirements.
-     *
-     * @param string $username
-     * @param string $password
-     * @return string
-     */
-    private function hashLogin(string $username, string $password)
-    {
-        $concat = mb_convert_encoding($password . strtolower($username), 'UTF-8');
-        $hash = hash('sha256', $concat, true);
-        return base64_encode($hash);
-    }
-
-    /**
-     * Makes a POST request to authenticate.
-     *
-     * @return mixed Authentication result
-     * @throws AuthenticationRequestFailedException
-     */
-    private function requestLogin()
-    {
-        try
-        {
-            $response = $this->guzzle->request('POST', 'https://members-ng.iracing.com/auth', [
-                'cookies' => $this->jar,
-                'headers' => [
-                    'Accept' => 'application/json',
-                    'Content-Type' => 'application/json',
-                ],
-                'body' => json_encode([
-                    'email' => $this->username,
-                    'password' => $this->loginHash
-                ])
-            ]);
-
-            return json_decode($response->getBody());
-        }
-        catch(\GuzzleHttp\Exception\BadResponseException $e)
-        {
-            throw new AuthenticationRequestFailedException($e->getMessage(), 0, $e);
-        }
-
-        return null;
     }
 
     /**
@@ -164,8 +92,19 @@ class Api
         $url = LibConstants::APIURL . $endpoint;
         try
         {
+            $token = is_callable($this->tokenProvider)
+                ? call_user_func($this->tokenProvider)
+                : null;
+
+            if (!$token) {
+                throw new RequestFailedException('Unauthorized: missing access token');
+            }
+
             $response = $this->guzzle->request('GET', $url, [
-                'cookies' => $this->jar,
+                'headers' => [
+                    'Accept' => 'application/json',
+                    'Authorization' => 'Bearer ' . $token,
+                ],
                 'query' => $data
             ]);
 
@@ -221,8 +160,7 @@ class Api
         switch($response->getStatusCode())
         {
             case 401:
-                $this->authenticate();
-                return true;
+                throw new RequestFailedException('Unauthorized', 0, $oldEx);
             case 429:
                 throw new RequestRateLimitedException('Rate limit exceeded', 0, $oldEx);
             case 503:
