@@ -5,6 +5,7 @@ namespace iRacingPHP;
 use iRacingPHP\Exceptions\RequestRateLimitedException;
 use iRacingPHP\Exceptions\SiteMaintenanceException;
 use iRacingPHP\Exceptions\RequestFailedException;
+use iRacingPHP\Exceptions\AuthorizationFailedException;
 use iRacingPHP\Models\RateLimits;
 use iRacingPHP\Exceptions\DataRequestFailedException;
 
@@ -97,7 +98,7 @@ class Api
                 : null;
 
             if (!$token) {
-                throw new RequestFailedException('Unauthorized: missing access token');
+                throw new AuthorizationFailedException('Unauthorized: missing access token', 401);
             }
 
             $response = $this->guzzle->request('GET', $url, [
@@ -160,7 +161,13 @@ class Api
         switch($response->getStatusCode())
         {
             case 401:
-                throw new RequestFailedException('Unauthorized', 0, $oldEx);
+                throw new AuthorizationFailedException(
+                    'Unauthorized',
+                    401,
+                    (string)$response->getBody(),
+                    $response->getHeaders(),
+                    $oldEx
+                );
             case 429:
                 throw new RequestRateLimitedException('Rate limit exceeded', 0, $oldEx);
             case 503:
