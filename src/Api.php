@@ -63,21 +63,44 @@ class Api
     private function retrieveChunks(mixed $chunks)
     {
         $result = [];
-        try
-        {
-            $baseUrl = $chunks->base_download_url;
-            foreach($chunks->chunk_file_names as $fileName)
-            {
-                $response = $this->guzzle->request('GET', $baseUrl . $fileName);
-                $result[] = json_decode($response->getBody());
-            }
+        $baseUrl = $chunks->base_download_url;
 
-            return $result;
-        }
-        catch(\GuzzleHttp\Exception\BadResponseException $e)
+        foreach($chunks->chunk_file_names as $fileName)
         {
-            throw new DataRequestFailedException($e->getMessage(), 0, $e);
+            // Retry on TCP-level transients (connection reset, timeout).
+            // iRacing's chunk URLs point at S3, which occasionally drops
+            // connections under back-to-back fetches. Up to 3 attempts
+            // with linear backoff covers the observed failure patterns.
+            // Real HTTP error responses (4xx/5xx) fail fast.
+            $maxAttempts = 3;
+            for ($attempt = 1; $attempt <= $maxAttempts; $attempt++)
+            {
+                try
+                {
+                    $response = $this->guzzle->request('GET', $baseUrl . $fileName);
+                    $result[] = json_decode($response->getBody());
+                    break;
+                }
+                catch(\GuzzleHttp\Exception\ConnectException $e)
+                {
+                    if ($attempt >= $maxAttempts)
+                    {
+                        throw new DataRequestFailedException(
+                            'Chunk fetch failed after ' . $maxAttempts . ' attempts: ' . $e->getMessage(),
+                            0,
+                            $e
+                        );
+                    }
+                    usleep(500_000 * $attempt);
+                }
+                catch(\GuzzleHttp\Exception\BadResponseException $e)
+                {
+                    throw new DataRequestFailedException($e->getMessage(), 0, $e);
+                }
+            }
         }
+
+        return $result;
     }
 
     /**
